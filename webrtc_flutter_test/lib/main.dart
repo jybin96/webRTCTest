@@ -1,181 +1,325 @@
+import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:stomp_dart_client/stomp.dart';
-import 'package:stomp_dart_client/stomp_config.dart';
-import 'package:stomp_dart_client/stomp_frame.dart';
+import 'package:sdp_transform/sdp_transform.dart';
 
+// void main() {
+//   runApp(MyApp());
+// }
+
+// class MyApp extends StatefulWidget {
+//   @override
+//   State<MyApp> createState() => _MyAppState();
+// }
+
+// class _MyAppState extends State<MyApp> {
+//   final _localRenderer = RTCVideoRenderer();
+//   final _remoteRenderer = RTCVideoRenderer();
+//   MediaStream? _localStream;
+//   RTCPeerConnection? pc;
+
+//   @override
+//   void dispose() {
+//     _localRenderer.dispose();
+//     super.dispose();
+//   }
+
+//   @override
+//   void initState() {
+//     initRenderers();
+//     _getUserMedia();
+//     super.initState();
+//   }
+
+//   initRenderers() async {
+//     await _localRenderer.initialize();
+//   }
+
+//   _getUserMedia() async {
+//     final Map<String, dynamic> mediaConstraints = {
+//       'audio': false,
+//       'video': {
+//         'facingMode': 'user',
+//       },
+//     };
+
+//     _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+//     _localRenderer.srcObject = _localStream;
+//   }
+
+//   @override
+//   Widget build(BuildContext context) {
+//     return MaterialApp(
+//         home: Container(
+//             color: Colors.white,
+//             child: Column(
+//               children: [
+//                 Expanded(child: RTCVideoView(_localRenderer)),
+//                 Expanded(child: RTCVideoView(_remoteRenderer)),
+//                 TextButton(
+//                   child: const Text("button"),
+//                   // ignore: avoid_print
+//                   onPressed: () => {},
+//                 ),
+//               ],
+//             )));
+//   }
+// }
 void main() {
-  runApp(MyApp());
+  runApp(const MyApp());
 }
 
-class MyApp extends StatefulWidget {
+class MyApp extends StatelessWidget {
+  const MyApp({Key? key}) : super(key: key);
+
+  // This widget is the root of your application.
   @override
-  State<MyApp> createState() => _MyAppState();
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Flutter Demo',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
+      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+    );
+  }
 }
 
-class _MyAppState extends State<MyApp> {
-  StompClient? stomp;
-  final _localRenderer = RTCVideoRenderer();
-  final _remoteRenderer = RTCVideoRenderer();
+class MyHomePage extends StatefulWidget {
+  const MyHomePage({Key? key, required this.title}) : super(key: key);
+
+  final String title;
+
+  @override
+  State<MyHomePage> createState() => _MyHomePageState();
+}
+
+class _MyHomePageState extends State<MyHomePage> {
+  final _localVideoRenderer = RTCVideoRenderer();
+  final _remoteVideoRenderer = RTCVideoRenderer();
+  final sdpController = TextEditingController();
+  bool _offer = false;
+
+  RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
-  RTCPeerConnection? pc;
 
-  @override
-  void initState() {
-    setState(() {
-      stomp = StompClient(
-          config: StompConfig.SockJS(
-              url: 'http://192.168.0.6:8080/ws', onConnect: onConnect));
+  initRenderer() async {
+    await _localVideoRenderer.initialize();
+    await _remoteVideoRenderer.initialize();
+  }
+
+  _getUserMedia() async {
+    final Map<String, dynamic> mediaConstraints = {
+      'audio': true,
+      'video': false
+    };
+
+    MediaStream? returnStream;
+    await navigator.mediaDevices.getUserMedia(mediaConstraints).then((stream) {
+      returnStream = stream;
+      var audioTrack = stream.getAudioTracks();
     });
 
-    _localRenderer.initialize();
-    _remoteRenderer.initialize();
-    init();
-    super.initState();
+    _localVideoRenderer.srcObject = returnStream;
+    return returnStream;
   }
 
-  Future init() async {
-    stomp?.activate();
-    await joinRoom();
-  }
-
-  void onConnect(StompFrame frame) {
-    stomp!.subscribe(
-        destination: '/topic/wagly/join',
-        callback: (StompFrame frame) async {
-          // ignore: avoid_print
-          print(frame.body);
-          _sendOffer();
-        });
-
-    stomp!.subscribe(
-        destination: '/topic/wagly/offer',
-        callback: (StompFrame frame) async {
-          // ignore: avoid_print
-          print(frame.body);
-          var data = jsonDecode(frame.body!);
-          await _gotOffer(RTCSessionDescription(data['sdp'], data['type']));
-          await _sendAnswer();
-        });
-
-    stomp!.subscribe(
-        destination: '/topic/wagly/answer',
-        callback: (StompFrame frame) {
-          // ignore: avoid_print
-          print(frame.body);
-          var data = jsonDecode(frame.body!);
-          _gotAnswer(RTCSessionDescription(data['sdp'], data['type']));
-        });
-
-    stomp!.subscribe(
-        destination: '/topic/wagly/ice',
-        callback: (StompFrame frame) {
-          // ignore: avoid_print
-          print(frame.body);
-          var data = jsonDecode(frame.body!);
-          _gotIce(RTCIceCandidate(
-              data['candidate'], data['sdpMid'], data['sdpMLineIndex']));
-        });
-  }
-
-  Future joinRoom() async {
-    final config = {
-      'iceServers': [
+  _createPeerConnecion() async {
+    Map<String, dynamic> configuration = {
+      "iceServers": [
         {"url": "stun:stun.l.google.com:19302"},
       ]
     };
 
-    final sdpConstraints = {
-      'mandatory': {
-        'OfferToReceiveAudio': true,
-        'OfferToReceiveVideo': true,
+    final Map<String, dynamic> offerSdpConstraints = {
+      "mandatory": {
+        "OfferToReceiveAudio": true,
+        "OfferToReceiveVideo": true,
       },
-      'optional': []
+      "optional": [],
     };
 
-    pc = await createPeerConnection(config, sdpConstraints);
+    _localStream = await _getUserMedia();
 
-    final mediaConstraints = {
-      'audio': true,
-      'video': {'facingMode': 'user'}
+    RTCPeerConnection pc =
+        await createPeerConnection(configuration, offerSdpConstraints);
+
+    pc.addStream(_localStream!);
+
+    pc.onIceCandidate = (e) {
+      if (e.candidate != null) {
+        print(json.encode({
+          'candidate': e.candidate.toString(),
+          'sdpMid': e.sdpMid.toString(),
+          'sdpMlineIndex': e.sdpMLineIndex,
+        }));
+      }
     };
 
-    _localStream = await Helper.openCamera(mediaConstraints);
+    pc.onIceConnectionState = (e) {
+      print(e);
+    };
 
-    _localStream!.getTracks().forEach((track) {
-      pc!.addTrack(track, _localStream!);
+    pc.onAddStream = (stream) {
+      print('addStream: ' + stream.id);
+      _remoteVideoRenderer.srcObject = stream;
+    };
+    Timer.periodic(new Duration(seconds: 10), (timer) {
+      _peerConnection!.getStats().then((stats) => {
+            stats.forEach((element) {
+              // ignore: avoid_print
+              print(element.values);
+            })
+          });
     });
 
-    _localRenderer.srcObject = _localStream;
-
-    pc!.onIceCandidate = (ice) {
-      _sendIce(ice);
-    };
-
-    pc!.onAddStream = (stream) {
-      _remoteRenderer.srcObject = stream;
-    };
-
-    stomp?.send(
-        destination: '/app/join',
-        body: jsonEncode("asdasdasdasd"),
-        headers: {});
+    return pc;
   }
 
-  Future _sendOffer() async {
-    var offer = await pc!.createOffer();
-    pc!.setLocalDescription(offer);
-    stomp?.send(
-        destination: '/app/offer',
-        body: jsonEncode(offer.toMap()),
-        headers: {});
+  void _createOffer() async {
+    RTCSessionDescription description =
+        await _peerConnection!.createOffer({'offerToReceiveVideo': 1});
+    var session = parse(description.sdp.toString());
+    print(json.encode(session));
+    _offer = true;
+
+    _peerConnection!.setLocalDescription(description);
   }
 
-  Future _gotOffer(RTCSessionDescription offer) async {
-    pc!.setRemoteDescription(offer);
+  void _createAnswer() async {
+    RTCSessionDescription description =
+        await _peerConnection!.createAnswer({'offerToReceiveVideo': 1});
+
+    var session = parse(description.sdp.toString());
+    print(json.encode(session));
+
+    _peerConnection!.setLocalDescription(description);
   }
 
-  Future _sendAnswer() async {
-    var answer = await pc!.createAnswer();
-    pc!.setLocalDescription(answer);
-    stomp?.send(
-        destination: '/app/answer',
-        body: jsonEncode(answer.toMap()),
-        headers: {});
+  void _setRemoteDescription() async {
+    String jsonString = sdpController.text;
+    dynamic session = await jsonDecode(jsonString);
+
+    String sdp = write(session, null);
+
+    RTCSessionDescription description =
+        RTCSessionDescription(sdp, _offer ? 'answer' : 'offer');
+    print(description.toMap());
+
+    await _peerConnection!.setRemoteDescription(description);
   }
 
-  Future _gotAnswer(RTCSessionDescription answer) async {
-    pc!.setRemoteDescription(answer);
+  void _addCandidate() async {
+    String jsonString = sdpController.text;
+    dynamic session = await jsonDecode(jsonString);
+    print(session['candidate']);
+    dynamic candidate = RTCIceCandidate(
+        session['candidate'], session['sdpMid'], session['sdpMlineIndex']);
+    await _peerConnection!.addCandidate(candidate);
   }
 
-  Future _sendIce(RTCIceCandidate ice) async {
-    // ignore: avoid_print
-    print("아이스임 아무튼 : ${jsonEncode(ice.toMap())}");
-    stomp?.send(
-        destination: '/app/ice', body: jsonEncode(ice.toMap()), headers: {});
-  }
-
-  Future _gotIce(RTCIceCandidate ice) async {
-    pc!.addCandidate(ice);
+  dynamic rtcEvent(RTCTrackEvent event) async {
+    print(event);
   }
 
   @override
+  void initState() {
+    initRenderer();
+    _createPeerConnecion().then((pc) {
+      _peerConnection = pc;
+      _peerConnection!.onTrack = (event) => {print(event)};
+    });
+    // _getUserMedia();
+
+    super.initState();
+  }
+
+  @override
+  void dispose() async {
+    await _localVideoRenderer.dispose();
+    sdpController.dispose();
+    super.dispose();
+  }
+
+  SizedBox videoRenderers() => SizedBox(
+        height: 210,
+        child: Row(children: [
+          Flexible(
+            child: Container(
+              key: const Key('local'),
+              margin: const EdgeInsets.fromLTRB(5.0, 5.0, 5.0, 5.0),
+              decoration: const BoxDecoration(color: Colors.black),
+              child: RTCVideoView(_localVideoRenderer),
+            ),
+          ),
+          Flexible(
+            child: Container(
+              key: const Key('remote'),
+              margin: const EdgeInsets.fromLTRB(5.0, 5.0, 5.0, 5.0),
+              decoration: const BoxDecoration(color: Colors.black),
+              child: RTCVideoView(_remoteVideoRenderer),
+            ),
+          ),
+        ]),
+      );
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-        home: Container(
-            color: Colors.white,
-            child: Column(
+    return Scaffold(
+        appBar: AppBar(
+          title: Text(widget.title),
+        ),
+        body: Column(
+          children: [
+            videoRenderers(),
+            Row(
               children: [
-                Expanded(child: RTCVideoView(_localRenderer)),
-                Expanded(child: RTCVideoView(_remoteRenderer)),
-                TextButton(
-                  child: const Text("button"),
-                  // ignore: avoid_print
-                  onPressed: () => {},
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: SizedBox(
+                    width: MediaQuery.of(context).size.width * 0.5,
+                    child: TextField(
+                      controller: sdpController,
+                      keyboardType: TextInputType.multiline,
+                      maxLines: 4,
+                      maxLength: TextField.noMaxLength,
+                    ),
+                  ),
                 ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    ElevatedButton(
+                      onPressed: _createOffer,
+                      child: const Text("Offer"),
+                    ),
+                    const SizedBox(
+                      height: 10,
+                    ),
+                    ElevatedButton(
+                      onPressed: _createAnswer,
+                      child: const Text("Answer"),
+                    ),
+                    const SizedBox(
+                      height: 10,
+                    ),
+                    ElevatedButton(
+                      onPressed: _setRemoteDescription,
+                      child: const Text("Set Remote Description"),
+                    ),
+                    const SizedBox(
+                      height: 10,
+                    ),
+                    ElevatedButton(
+                      onPressed: _addCandidate,
+                      child: const Text("Set Candidate"),
+                    ),
+                  ],
+                )
               ],
-            )));
+            ),
+          ],
+        ));
   }
 }
