@@ -108,7 +108,34 @@ class _MyHomePageState extends State<MyHomePage> {
     await _localVideoRenderer.initialize();
     await _remoteVideoRenderer.initialize();
   }
+  _getAudioTrack(){
+    _peerConnection?.getStats().then((stats) => _test(stats));
+  }
+  _test(stats) async{
+    var results = stats;
+    print(results[0].values);
+    // for(var i = 0 ; i < results.length; i++){
+    //   print("$i번쨰임");
+    //   print(results[i].values);
+    // }
+    print("===============================================");
+    // for(int i = 0; stats.length; i++){
+    //   var res = stats[i];
+    //   // var volume = res.stat('audioInputLevel');
+    //   print(res);
+    // }
+  }
+  _muted() async {
+    var stats = await _peerConnection?.getLocalStreams();
+    var audioTrack = _localStream!.getAudioTracks()[0];
+    if(audioTrack.enabled){
+      audioTrack.enabled = false;
+    }else{
+      audioTrack.enabled = true;
+    }
+    print(_localStream!.getAudioTracks()[0]);
 
+  }
   _getUserMedia() async {
     final Map<String, dynamic> mediaConstraints = {
       'audio': true,
@@ -165,14 +192,6 @@ class _MyHomePageState extends State<MyHomePage> {
       print('addStream: ' + stream.id);
       _remoteVideoRenderer.srcObject = stream;
     };
-    Timer.periodic(new Duration(seconds: 10), (timer) {
-      _peerConnection!.getStats().then((stats) => {
-            stats.forEach((element) {
-              // ignore: avoid_print
-              print(element.values);
-            })
-          });
-    });
 
     return pc;
   }
@@ -228,7 +247,6 @@ class _MyHomePageState extends State<MyHomePage> {
     initRenderer();
     _createPeerConnecion().then((pc) {
       _peerConnection = pc;
-      _peerConnection!.onTrack = (event) => {print(event)};
     });
     // _getUserMedia();
 
@@ -314,6 +332,14 @@ class _MyHomePageState extends State<MyHomePage> {
                     ElevatedButton(
                       onPressed: _addCandidate,
                       child: const Text("Set Candidate"),
+                    ),
+                    ElevatedButton(
+                      onPressed: _getAudioTrack,
+                      child: const Text("get audio track"),
+                    ),
+                    ElevatedButton(
+                      onPressed: _muted,
+                      child: const Text("muted"),
                     ),
                   ],
                 )
